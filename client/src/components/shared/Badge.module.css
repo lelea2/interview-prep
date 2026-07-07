@@ -1,0 +1,58 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.78em;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+.badge[data-tone='priority'][data-value='High'] {
+  background: #fde2e2;
+  color: #b42318;
+}
+.badge[data-tone='priority'][data-value='Medium'] {
+  background: #fef3c7;
+  color: #92400e;
+}
+.badge[data-tone='priority'][data-value='Low'] {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.badge[data-tone='status'][data-value='Applied'] {
+  background: #e5e7eb;
+  color: #374151;
+}
+.badge[data-tone='status'][data-value='Recruiter Screen'] {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.badge[data-tone='status'][data-value='Technical Screen'] {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.badge[data-tone='status'][data-value='Onsite'] {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+.badge[data-tone='status'][data-value='Offer'] {
+  background: #d1fae5;
+  color: #047857;
+}
+.badge[data-tone='status'][data-value='Rejected'] {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.badge[data-tone='status'][data-value='Follow-up Needed'] {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .badge {
+    filter: brightness(0.9) saturate(0.85);
+  }
+}

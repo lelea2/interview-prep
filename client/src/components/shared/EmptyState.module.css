@@ -1,0 +1,20 @@
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--text);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.title {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.description {
+  font-size: 0.9em;
+}

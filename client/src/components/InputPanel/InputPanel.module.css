@@ -1,0 +1,82 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+
+.label {
+  font-weight: 600;
+  font-size: 0.9em;
+  color: var(--text-h);
+}
+
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.9em;
+  color: var(--text-h);
+  background: var(--bg);
+  resize: vertical;
+}
+
+.textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.error {
+  margin: 0;
+  font-size: 0.85em;
+  color: #b91c1c;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primaryButton,
+.secondaryButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+
+.loadingContent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.primaryButton {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.primaryButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.secondaryButton {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.secondaryButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

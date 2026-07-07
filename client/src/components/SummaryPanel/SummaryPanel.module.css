@@ -1,0 +1,74 @@
+.panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 0.9em;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+
+.cardValue {
+  font-size: 1.6em;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.cardLabel {
+  font-size: 0.8em;
+  color: var(--text);
+}
+
+.cardList {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.78em;
+  color: var(--text);
+}
+
+.cardListMore {
+  opacity: 0.7;
+  font-style: italic;
+}
+
+.cardHint {
+  margin-top: 4px;
+  font-size: 0.75em;
+  color: var(--text);
+  opacity: 0.8;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--table-header-bg);
+  color: var(--text-h);
+  font-size: 0.72em;
+  font-weight: 500;
+  white-space: nowrap;
+}
