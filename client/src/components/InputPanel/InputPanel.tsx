@@ -2,13 +2,6 @@ import { useState } from 'react';
 import { Spinner } from '../shared/Spinner';
 import styles from './InputPanel.module.css';
 
-// One submit = one row (see server/src/services/parser.ts), so the sample
-// covers a single company — pasting notes for another company is a second
-// paste + submit, not a second paragraph in the same one.
-const SAMPLE_INPUT = `Stripe - Staff Frontend Engineer
-Recruiter screen scheduled July 20 with Jane. Prep: React, system design, payments API.
-Next: send portfolio link by Friday.`;
-
 interface InputPanelProps {
   onSubmit: (raw: string) => Promise<unknown>;
   loading: boolean;
@@ -20,8 +13,13 @@ export function InputPanel({ onSubmit, loading, error }: InputPanelProps) {
 
   async function handleGenerate() {
     if (!raw.trim() || loading) return;
-    await onSubmit(raw).catch(() => {});
-    setRaw('');
+    try {
+      await onSubmit(raw);
+      setRaw('');
+    } catch {
+      // Failure is already surfaced via the `error` prop — keep the user's
+      // text in place instead of silently discarding it.
+    }
   }
 
   return (
@@ -39,14 +37,6 @@ export function InputPanel({ onSubmit, loading, error }: InputPanelProps) {
       />
       {error && <p className={styles.error}>{error}</p>}
       <div className={styles.actions}>
-        <button
-          type="button"
-          className={styles.secondaryButton}
-          onClick={() => setRaw(SAMPLE_INPUT)}
-          disabled={loading}
-        >
-          Load Sample
-        </button>
         <button
           type="button"
           className={styles.primaryButton}

@@ -54,7 +54,8 @@ interview-prep/
 │   │   │   ├── parse.ts          # POST /parse
 │   │   │   └── summary.ts        # GET /summary
 │   │   ├── services/
-│   │   │   ├── parser.ts         # Extraction logic
+│   │   │   ├── parser.ts         # Builds a TrackerRow from openaiClient's extraction + server-generated id/timestamps
+│   │   │   ├── openaiClient.ts   # Calls OpenAI (Structured Outputs) to extract fields from raw notes
 │   │   │   ├── summary.ts        # Metrics computation
 │   │   │   └── tableUtils.ts     # filterRows / sortRows (shared by repo + routes)
 │   │   ├── schemas/
@@ -63,9 +64,8 @@ interview-prep/
 │   │   │   ├── asyncHandler.ts   # forwards async route errors to next()
 │   │   │   └── errorHandler.ts   # ZodError / HttpError / malformed-JSON → ApiError
 │   │   ├── lib/
-│   │   │   ├── httpError.ts      # HttpError(status, message, details?)
-│   │   │   └── constants.ts      # COMPANY_KEYWORDS, PREP_TOPIC_KEYWORDS, DATE_PATTERNS, STAGE_* (used by services/parser.ts)
-│   │   └── index.ts              # Express app entry
+│   │   │   └── httpError.ts      # HttpError(status, message, details?)
+│   │   └── index.ts              # Express app entry — loads server/.env via `dotenv/config`
 │   ├── tsconfig.json
 │   └── package.json
 ├── shared/          # Types shared between client and server
@@ -244,25 +244,19 @@ Pre-seeded with 4 companies at different stages — **no user action needed to s
 
 Each seed row has realistic prep topics, next actions, follow-up owners, and notes. The seed runs synchronously at server startup: `await repo.bulkInsertRows(SEED_ROWS)`.
 
-### Parser service (`server/src/services/parser.ts`)
+### Parser service (`server/src/services/parser.ts` + `openaiClient.ts`) — history below, current state first
 
-Deterministic regex-based extraction. Lives on the server so logic is centralized — client just POSTs raw text and receives `TrackerRow[]`. Functions:
+**Current state:** extraction is a real LLM call (OpenAI, Structured Outputs), not regex. `parseInput(raw, referenceDate?): Promise<TrackerRow[]>` trims the input, returns `[]` for empty text, otherwise calls `openaiClient.extractOpportunity()` and attaches server-generated `id`/`opportunityId`/timestamps. `notes` is kept as the user's **original pasted text**, not an LLM summary — nothing is silently lost if the model mis-extracts a field, since the raw text is still on the row. `nextActionDone` is always `false` for a fresh extraction (matches the old regex behavior).
 
-```ts
-parseInput(raw: string): TrackerRow[]
-inferCompany(text: string): string
-inferRole(text: string): string
-inferStage(text: string): string
-inferDate(text: string, referenceDate?: Date): string | null
-inferPrepTopics(text: string): string[]
-inferStatus(stage: string, text: string): InterviewStatus
-inferPriority(text: string, date: string | null): Priority
-inferNextAction(text: string): string
-```
+`openaiClient.ts` (new) owns everything OpenAI-specific:
+- Model: `OPENAI_MODEL` env var, default `gpt-4o-mini`
+- `response_format: { type: 'json_schema', ..., strict: true }` — the model is constrained to return exactly the 10 fields in `EXTRACTION_JSON_SCHEMA` (company, role, status, priority, stage, interviewDate, interviewType, prepTopics, nextAction, followUpOwner), with `status`/`priority`/`interviewType` as JSON Schema `enum`s built from `INTERVIEW_STATUSES`/`PRIORITIES`/`INTERVIEW_TYPES` — same source-of-truth pattern as the Zod schemas
+- The response is re-validated through `llmExtractionSchema` (a Zod schema, `trackerRowSchema.omit({...})` — see `schemas/tracker.ts`) before being trusted, even though Structured Outputs should already guarantee the shape — defense in depth against API/model version drift
+- **No `OPENAI_API_KEY` configured →** throws immediately with a clear `500` before making a network call, surfaced via the existing inline error UI in `InputPanel` (no new UI needed). **OpenAI call fails →** `502` with the upstream error message. **No silent fallback to regex** — see tradeoff below.
 
-Documented test cases live as comments above each function.
+**History:** this replaced a deterministic regex-based `parseInput` (originally 9 exported `infer*` functions + a keyword/pattern table in `lib/constants.ts`, extracted there during the Phase 8 refactor pass). Two behavior fixes landed on the regex version before the LLM swap and both carried forward as design constraints on the new implementation: (1) one `parseInput` call always produces **at most one row** — the whole pasted text is one opportunity, not split into multiple rows; pasting a second company is a second paste + submit; (2) the client's "Load Sample" button was removed entirely (not just trimmed) once notes couldn't be a canned fixture anymore — every submit now genuinely calls the LLM.
 
-**Fix (post-Phase 8):** `parseInput` originally called a `splitIntoOpportunityBlocks` helper that split the raw text on blank lines and produced one row per block — so pasting one company's notes across multiple paragraphs (a very natural way to paste messy notes) silently produced several unrelated/misattributed rows instead of one. Changed to: **every `parseInput` call produces at most one row**, built from the whole trimmed input. One "Generate Tracker" submit = one row; tracking a second company is a second paste + submit. `splitIntoOpportunityBlocks` was deleted (no longer had a caller). The client's "Load Sample" text was trimmed from two company paragraphs to one, since pasting two companies together would now (correctly) produce a single merged/misattributed row rather than two — the UI no longer suggests a workflow the parser doesn't support.
+**Tradeoff — hard failure over silent fallback:** when `OPENAI_API_KEY` is missing or the call fails, `POST /api/parse` fails outright rather than quietly falling back to the old regex logic (which was deleted, not kept as a fallback path). Rationale: for a feature that's explicitly "AI-powered," silently substituting a different, lower-quality extraction method would be more confusing than a clear error telling the user what to fix — the rest of the app (seeded data, inline editing, filters, summary) doesn't depend on this and keeps working regardless. See `RUNBOOK.md`'s Environment Variables section for setup.
 
 ### Summary service (`server/src/services/summary.ts`)
 
@@ -312,16 +306,17 @@ Used by query params on `GET /api/rows?status=Onsite&sortBy=interviewDate`.
 
 No automated test runner is wired up yet (tracked as a follow-up in Phase 9). For this pass, each service function and route was exercised directly — service functions via a `tsx` smoke script against real inputs (not just `tsc`/`oxlint`), routes via a live server + `curl`. Recording the scenarios here so they can be lifted into a Vitest suite later without re-deriving them.
 
-### `services/parser.ts`
-| Scenario | Input | Expected |
-|---|---|---|
-| Single row per call *(updated post-Phase 8 — see parser fix note above)* | Multi-paragraph input spanning two companies (Stripe, Meta), `\n\n`-separated | Exactly 1 row back, not 2 — confirmed live via headless Chromium: table row count went 7 → 8 (not 9) after submitting a two-paragraph paste |
-| Stage vs. prep-topic keyword collision | `"Recruiter screen scheduled ... prep ... system design"` | `stage: "Recruiter Screen"`, not `"System Design"` — literal event-type phrases outrank topic-list words (regression: this was wrong until the `STAGE_PATTERNS` ordering fix below) |
-| Explicit date formats | `"July 10"`, `"2026-08-01"`, `"7/8"` | All resolve to correct `YYYY-MM-DD` |
-| No date present | Free text with no date-like token | `interviewDate: null` |
-| Stalled application | `"Applied ... No response yet, waiting to hear back"` | `status: "Follow-up Needed"`, `followUpOwner` set to `"<company> recruiter"` |
-| Labeled prep list | `"Prep: React, TypeScript, leadership stories, behavioral."` | `["React", "TypeScript", "leadership stories", "behavioral"]` — trailing `.` stripped (regression: was `"behavioral."` until fixed) |
-| Urgent/near-term date | Interview date within 7 days of reference date | `priority: "High"` |
+### `services/parser.ts` + `openaiClient.ts` *(rewritten after the LLM swap — the regex-specific scenarios this table used to list, e.g. "stage vs. prep-topic keyword collision," no longer apply since that code was deleted)*
+| Scenario | Input | Expected | Verified how |
+|---|---|---|---|
+| Single row per call | Multi-paragraph input spanning two companies (Stripe, Meta), `\n\n`-separated | Exactly 1 row back, not 2 | Live, pre-LLM-swap: table row count went 7 → 8 (not 9) after submitting a two-paragraph paste. Still true post-swap by construction — `parseInput` makes exactly one `extractOpportunity()` call per input regardless of paragraph breaks |
+| Empty input | `""` / whitespace-only | `[]`, no OpenAI call made | Code inspection (`if (!text) return [];` before the `extractOpportunity` call) — cheap to verify, avoids burning a request on nothing |
+| Missing API key | `OPENAI_API_KEY` unset, `POST /api/parse` with valid notes | `500` with `"Server is not configured with OPENAI_API_KEY. Set it in server/.env..."`; no network call attempted | Live: `curl -X POST /api/parse` → confirmed exact message and status; then live in browser — inline error rendered under the textarea, **and the textarea's contents were preserved** (see next row) |
+| Failed submit doesn't discard the user's text | Same as above, submitted via the UI | Textarea keeps the pasted notes after a failed submit, not cleared | Live: caught as a real bug during this verification pass — `InputPanel.handleGenerate` was unconditionally clearing the textarea via `.catch(() => {})` followed by `setRaw('')`, even on failure. Fixed to only clear on success; re-verified the textarea retains its value after a forced failure |
+| `notes` preserves the original text | N/A — by construction | `notes` is set to the trimmed raw input directly in `parser.ts`, never passed through the LLM | Code inspection — `notes` is deliberately excluded from `llmExtractionSchema` / `EXTRACTION_JSON_SCHEMA` so there's nothing for the model to alter |
+| Malformed/unexpected LLM response | *(not exercised — would require mocking the OpenAI SDK)* | `llmExtractionSchema.safeParse` fails → `502` with `ZodError.flatten()` details | Code inspection only; flagged as a gap for a future test suite (see Phase 3's Vitest/supertest note) |
+
+**Not yet re-verified against a real API key** (none was available in this environment): the actual happy-path extraction quality (does `gpt-4o-mini` correctly infer company/stage/date/priority from messy notes) is unverified beyond the JSON-shape validation above. Worth a manual pass with a real key before calling this feature done.
 
 ### `services/summary.ts`
 | Scenario | Input | Expected |
@@ -373,7 +368,7 @@ client/src/
 │   └── summary.ts       # getSummary
 ├── components/
 │   ├── InputPanel/
-│   │   ├── InputPanel.tsx       # Textarea + "Generate Tracker" + "Load Sample" buttons
+│   │   ├── InputPanel.tsx       # Textarea + "Generate Tracker" button (no "Load Sample" — removed post-LLM-swap, see Phase 2)
 │   │   └── InputPanel.module.css
 │   ├── TrackerTable/
 │   │   ├── TrackerTable.tsx     # Table shell: error banner, loading/empty states, <table>
@@ -472,7 +467,7 @@ Same approach as Phase 2/3: no automated runner yet, so the app was actually dri
 ### Parse → persist flow (`InputPanel` + `useParseInput`)
 | Scenario | Steps | Result |
 |---|---|---|
-| Load Sample → Generate Tracker | Click **Load Sample**, then **Generate Tracker** | `POST /api/parse` then `POST /api/rows/bulk` logged in sequence; row count 7 → 8 (1 row — sample text was trimmed to a single company after the one-row-per-submit fix, see note above); textarea cleared after submit |
+| Paste notes → Generate Tracker *(originally "Load Sample → Generate Tracker" — "Load Sample" was removed once the parser became a real LLM call; see Phase 2)* | Paste notes, click **Generate Tracker** | `POST /api/parse` then `POST /api/rows/bulk` logged in sequence; textarea cleared after a **successful** submit only (a failed submit preserves the text — see the Phase 2 testing table for the bug this caught) |
 | Summary refetches after parse | Same run | Cards updated without a manual refresh — confirms `useSummary`'s `version`-keyed refetch fires on `bulkInsertRows`, not just on `updateRow`/`deleteRow` |
 | Empty parse result | *(not exercised this pass — would require raw text with no extractable signal)* | Code path exists (`useParseInput` sets the "Couldn't extract opportunities..." message when `rows.length === 0`); flag as a gap for the future test suite |
 
@@ -553,7 +548,7 @@ Same approach as prior phases: driven with headless Chromium (Playwright), scree
 ## Phase 8 — Refactor & a11y ✅ Implemented
 
 - ~~`useMemo` on filtered/sorted rows (client)~~ — already done as part of Phase 6
-- **`server/src/lib/constants.ts`** now holds `COMPANY_KEYWORDS`, `PREP_TOPIC_KEYWORDS`, `MONTHS`, `DATE_PATTERNS` (the three date regexes `parser.ts` used inline, now named and grouped), `STAGE_PATTERNS`, `STAGE_TO_INTERVIEW_TYPE`, and `STAGE_TO_STATUS`. `services/parser.ts` imports all of them and now reads as pure inference functions over these tables, with no embedded keyword lists. Re-ran the Phase 2 parser smoke test after the move — byte-identical output, confirming the extraction was mechanical (no behavior change).
+- ~~`server/src/lib/constants.ts` now holds `COMPANY_KEYWORDS`, `PREP_TOPIC_KEYWORDS`, `MONTHS`, `DATE_PATTERNS`, `STAGE_PATTERNS`, `STAGE_TO_INTERVIEW_TYPE`, `STAGE_TO_STATUS`~~ — **superseded:** this file (and the regex `parseInput` it supported) was deleted entirely when the parser was later replaced with a real OpenAI extraction call — see Phase 2's "current state" writeup above. Extracting these constants was still the correct call *at the time*, and the smoke-test-after-move verification step is a pattern worth reusing for the next mechanical refactor.
 - ~~`aria-label` on icon buttons~~ / `role="grid"` — already in place from Phases 5–7
 - **Keyboard nav on cells**: arrow-key movement between grid cells, spreadsheet-style. Implemented as a single `onKeyDown` handler on the `<table>` (event delegation, not per-cell) in `TrackerTable.tsx`. Scoped carefully: it's skipped when the focused element is an actively-editing `.cellInput` (text/date) or an open `<select>`, so arrow keys move the text cursor / dropdown selection instead of jumping cells — verified live: typing into a cell and pressing ArrowLeft twice keeps the `<input>` focused (cursor moves), while arrow keys on the static (non-editing) cell button move focus to the adjacent `<td>`'s focusable element via DOM `previousElementSibling`/`nextElementSibling`/column-index lookup. **Known gap:** arrow-up from the first data row doesn't reach the header's sort buttons (documented in a code comment) — the header is a separate click-to-sort surface, not part of the grid-nav scope for this pass.
 - **Final dead-code pass:** swept for stray `console.log`/`console.debug` (none — the two `console.log` calls that exist are the intentional dev-request-logger and startup banner in `index.ts`, and the one `console.error` is the error-handler's 500 logger), unused exports (all component/hook/service files trace back to `App.tsx` or `index.ts`), and orphaned CSS classes (checked every `.module.css` class against its component — none unused).
@@ -573,11 +568,13 @@ Same approach as prior phases: driven with headless Chromium (Playwright), scree
 > "Date inference needed anchoring to today's date. The optimistic update error-revert logic required careful thought. Summary panel layout was reworked for scannability."
 
 **What I would improve next:**
-> 1. Real LLM extraction (OpenAI API) replacing the regex parser
+> 1. ~~Real LLM extraction (OpenAI API) replacing the regex parser~~ — done, see Phase 2. Next: verify extraction quality against a real key (not yet possible in this environment), and consider a retry/backoff on transient OpenAI failures rather than failing the request outright
 > 2. Swap `InMemoryRepository` for `PostgresRepository` (Supabase or Railway)
 > 3. `localStorage` persistence as a middle ground before a real DB
 > 4. Export to CSV / Airtable-paste format
 > 5. Email thread import
+
+*(This whole Phase 9 section — including "What was built" and "How the AI agent helped" above — is still the original placeholder text from early in the build and describes a hypothetical Copilot-assisted session, not what actually happened. Flagged in the Phase 8 pass as needing a real rewrite once the walkthrough is actually being prepared; not done as part of this LLM-extraction change.)*
 
 ---
 
@@ -607,7 +604,7 @@ Same approach as prior phases: driven with headless Chromium (Playwright), scree
 |---|---|---|
 | DB | In-memory `Map` behind repository interface | Zero deps; swap to Postgres = replace one file |
 | Pre-seeded data | Runs at server startup, always visible | Demo works immediately, no user action needed |
-| AI extraction | Deterministic regex parser (server-side) | Testable, no API key, fast; upgrade path to LLM is clear |
+| AI extraction | OpenAI (`gpt-4o-mini`, Structured Outputs), server-side, hard failure if unconfigured | Real understanding of messy notes vs. keyword regex; requires `OPENAI_API_KEY` + network call + per-request cost, and no fallback if it's missing — see Phase 2's "hard failure over silent fallback" tradeoff note |
 | UI library | None (raw CSS modules) | Avoids "library demo" feel; shows real CSS judgment |
 | State management | `useState` + custom hooks + server as source of truth | No Redux needed; optimistic updates cover latency |
 | Filtering/sorting | Client-side, duplicated (not shared) sort/filter algorithm | Instant feedback; server query params (Phase 3) remain available but unused by the client today — see Phase 6 deviation note on why the logic wasn't moved to `shared/` |

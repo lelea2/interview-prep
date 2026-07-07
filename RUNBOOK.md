@@ -6,7 +6,9 @@
 
 ## Current State vs. Planned Architecture
 
-Phases 0–8 are done: real server (scaffold, shared types, repository/services, API routes, parser keyword tables extracted to `lib/constants.ts`) plus a fully-featured, keyboard-navigable client (API helpers, hooks, editable table, add/delete rows, paste-notes-to-table flow, client-side filter/sort, live summary panel, empty states, toasts, row-insert highlight, arrow-key grid navigation). Only Phase 9 (walkthrough writeup) remains.
+Phases 0–8 are done: real server (scaffold, shared types, repository/services, API routes) plus a fully-featured, keyboard-navigable client (API helpers, hooks, editable table, add/delete rows, paste-notes-to-table flow, client-side filter/sort, live summary panel, empty states, toasts, row-insert highlight, arrow-key grid navigation). Only Phase 9 (walkthrough writeup) remains.
+
+**Post-Phase-8 change:** the deterministic regex parser was replaced with a real OpenAI extraction call (`server/src/services/openaiClient.ts`) — see [Environment Variables](#environment-variables) for the required `OPENAI_API_KEY`. "Load Sample" was removed from the client since it no longer fits the one-submit-one-row, LLM-backed flow.
 
 | | Now |
 |---|---|
@@ -111,23 +113,26 @@ npm run typecheck -w shared
 
 ## Environment Variables
 
-No `.env` file is required to run in development. All defaults are set in code.
+`server/src/index.ts` loads `server/.env` automatically via `dotenv/config` (the first import in the file) — create the file for local dev; on a real host (Railway/Render/etc.) set these as platform env vars instead and skip the file.
 
-| Variable | Default | Where set | Purpose |
+| Variable | Default | Required? | Purpose |
 |---|---|---|---|
-| `PORT` | `3001` | `server/src/index.ts` | Express listen port |
-| `CLIENT_ORIGIN` | `http://localhost:5173` | `server/src/index.ts` | CORS allow-list |
-| `NODE_ENV` | `development` | shell / CI | Enables request logging |
+| `OPENAI_API_KEY` | — | **Yes**, for Generate Tracker | Used by `services/openaiClient.ts` to extract structured rows from pasted notes. Without it, `POST /api/parse` returns a `500` with a clear "not configured" message — the rest of the app (seeded data, editing, filters) works fine either way. |
+| `OPENAI_MODEL` | `gpt-4o-mini` | No | Model used for extraction (must support Structured Outputs / `response_format: json_schema`) |
+| `PORT` | `3001` | No | Express listen port |
+| `CLIENT_ORIGIN` | `http://localhost:5173` | No | CORS allow-list |
+| `NODE_ENV` | `development` | No | Enables request logging |
 
-For production, create `server/.env`:
+Create `server/.env` (gitignored — see `.gitignore` at the repo root):
 
 ```
+OPENAI_API_KEY=sk-...
 PORT=3001
-CLIENT_ORIGIN=https://your-deployed-client.com
-NODE_ENV=production
+CLIENT_ORIGIN=http://localhost:5173
+NODE_ENV=development
 ```
 
-> Never commit `.env` files. The `.gitignore` covers `*.env` and `.env*`.
+> Never commit `.env` files or paste a real key into a prompt, commit message, or this file. Get a key at platform.openai.com if you don't have one.
 
 ---
 
@@ -188,10 +193,10 @@ interview-prep/
 │   ├── src/
 │   │   ├── db/              # interface.ts · inMemoryDb.ts · seed.ts
 │   │   ├── routes/          # rows.ts · parse.ts · summary.ts
-│   │   ├── services/        # parser.ts · summary.ts · tableUtils.ts
+│   │   ├── services/        # parser.ts · openaiClient.ts (LLM extraction) · summary.ts · tableUtils.ts
 │   │   ├── schemas/         # tracker.ts — Zod schemas
 │   │   ├── middleware/      # asyncHandler.ts · errorHandler.ts
-│   │   ├── lib/             # httpError.ts · constants.ts (parser keyword/pattern tables)
+│   │   ├── lib/             # httpError.ts
 │   │   └── index.ts
 │   └── tsconfig.json
 ├── shared/                  # Shared TypeScript types (client + server)

@@ -44,8 +44,7 @@
   gap: 8px;
 }
 
-.primaryButton,
-.secondaryButton {
+.primaryButton {
   padding: 8px 16px;
   border-radius: 6px;
   font-weight: 600;
@@ -66,17 +65,6 @@
 }
 
 .primaryButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.secondaryButton {
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-h);
-}
-
-.secondaryButton:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

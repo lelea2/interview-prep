@@ -47,6 +47,20 @@ export const trackerRowSchema = z.object({
   updatedAt: isoDateTimeSchema,
 });
 
+// Fields the LLM extraction call (services/openaiClient.ts) is responsible
+// for. Everything else on TrackerRow is server-generated: `id`/`opportunityId`
+// (identity), `notes` (kept as the user's original pasted text, not a
+// summary — see parser.ts), `nextActionDone` (always false for a fresh
+// extraction), and the timestamps.
+export const llmExtractionSchema = trackerRowSchema.omit({
+  id: true,
+  opportunityId: true,
+  notes: true,
+  nextActionDone: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // Fields a client is allowed to PATCH — identity and creation time are immutable.
 export const updateRowRequestSchema = z.object({
   fields: trackerRowSchema

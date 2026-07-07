@@ -14,7 +14,9 @@
   "dependencies": {
     "@interview-prep/shared": "*",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^4.19.2",
+    "openai": "^6.45.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
