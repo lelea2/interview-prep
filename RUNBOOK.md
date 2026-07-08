@@ -198,9 +198,14 @@ interview-prep/
 │   │   ├── middleware/      # asyncHandler.ts · errorHandler.ts
 │   │   ├── lib/             # httpError.ts
 │   │   └── index.ts
-│   └── tsconfig.json
+│   ├── tsconfig.json
+│   └── tsup.config.ts       # noExternal: ['@interview-prep/shared'] — see Deployment (Railway)
 ├── shared/                  # Shared TypeScript types (client + server)
 │   └── types.ts
+├── Dockerfile                # Builds + runs the server only, for Railway
+├── .dockerignore
+├── railway.json               # Points Railway at the Dockerfile + healthcheck
+├── .gitignore
 ├── package.json             # Root workspace: scripts + concurrently
 ├── BUILD_PLAN.md            # Implementation plan and architecture decisions
 └── RUNBOOK.md               # This file
@@ -243,9 +248,27 @@ And that the server is running before the client dev server starts.
 
 ---
 
-## Deployment Notes (future)
+## Deployment (Railway)
 
-- **Client:** build with `npm run build -w client`, serve `client/dist/` as static files (Vercel, Netlify, or nginx)
-- **Server:** build with `npm run build -w server`, run `node server/dist/index.js` (Railway, Render, Fly.io)
-- **DB:** swap `InMemoryRepository` for `PostgresRepository` + set `DATABASE_URL` env var
-- **CORS:** set `CLIENT_ORIGIN` to the production client URL
+The root `Dockerfile` builds and runs **the server only** — the client is a separate static-hosting deploy (Vercel/Netlify/nginx), not part of this image. `railway.json` points Railway at the Dockerfile and sets a `/api/health` healthcheck.
+
+### Deploy
+
+1. In Railway, create a service from this repo (or `railway up` from the repo root with the Railway CLI). It auto-detects `railway.json` → `Dockerfile`.
+2. Set environment variables on the Railway service (Settings → Variables):
+   - `OPENAI_API_KEY` — **required** for Generate Tracker (see [Environment Variables](#environment-variables))
+   - `CLIENT_ORIGIN` — the deployed client's URL (e.g. `https://your-app.vercel.app`), so CORS allows it
+   - `OPENAI_MODEL` — optional, defaults to `gpt-4o-mini`
+   - Do **not** set `PORT` — Railway injects its own and the server already reads `process.env.PORT`
+3. Deploy the client separately (`npm run build -w client` → serve `client/dist/`), pointing its API calls at the Railway service's URL.
+
+### How the image is built (why it looks the way it does)
+
+- **Multi-stage, server-only.** `build-deps` (full install) → `build` (compiles `server/dist/index.js` via `npm run build -w server`) → `prod-deps` (runtime-only install, no devDependencies, no client) → `runtime` (final image: just `node_modules` + `server/dist`). Keeps the deployed image free of TypeScript/tsup/oxlint/the client's React toolchain.
+- **`server/tsup.config.ts` sets `noExternal: ['@interview-prep/shared']`.** This was a real bug caught while building this Dockerfile, not a preemptive guess: tsup externalizes anything listed in `package.json` `dependencies` by default, and `@interview-prep/shared` is listed there (it's a workspace package, not an npm one). Files that only did `import type {...}` from shared were unaffected (type-only imports are erased at compile time either way), but `schemas/tracker.ts` and `services/openaiClient.ts` import real *values* (`INTERVIEW_STATUSES`, etc.) — those imports were silently left as an unresolved `from "@interview-prep/shared"` in the compiled output. Running the built bundle directly on the host "worked" anyway, purely by accident: Node's bare-specifier resolution walks up from the script's own directory looking for `node_modules`, and it happened to find the real monorepo's workspace symlink. That symlink doesn't exist in a real deployment — the built image would have crashed on the very first request that hit `openaiClient.ts`, i.e. the first "Generate Tracker" click. Caught by actually running `docker build` + `docker run` + a live request against the container, not by reading the build log.
+- Verified end-to-end against this Dockerfile: container boots, `/api/health` and `/api/rows` respond correctly with no host filesystem access, and `/api/parse` correctly calls OpenAI when a real key is injected via `--env-file` at `docker run` time (never baked into the image).
+
+### Not yet done
+
+- **DB:** still `InMemoryRepository` — data resets on every deploy/restart. Swap for `PostgresRepository` + set `DATABASE_URL` when ready (see the repository-swap note earlier in this file).
+- No CI wired up to actually run `docker build` on push — worth adding before this is relied on for real deploys, since the bug above shows a green `tsc`/`vite build` doesn't guarantee the container actually boots.

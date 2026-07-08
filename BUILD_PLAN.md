@@ -612,6 +612,7 @@ Same approach as prior phases: driven with headless Chromium (Playwright), scree
 | Client mutation reconciliation | Optimistic update → replace with server response on success → revert + toast on failure | Toast (Phase 7) replaced the Phase 5 inline error banner once it existed — the reverted row is persistent evidence something failed, the toast just explains why |
 | Hook coupling | `useRows` exposes a `version` counter; `useSummary(refreshKey)` refetches when it changes | `useSummary` doesn't need to know *why* to refetch, only *that* something changed — avoids the two hooks importing each other |
 | Testing | Manual smoke scripts (server: `tsx` + `curl`; client: headless Chromium via Playwright, screenshots + console/network assertions) — no automated runner wired up yet. Scenarios recorded in the Testing sections for [Phase 2+3](#testing--scenarios-verified-for-phase-2--3), [Phase 4+5](#testing--scenarios-verified-for-phase-4--5), and [Phase 6+7](#testing--scenarios-verified-for-phase-6--7) | Pragmatic for timebox; scenarios are the spec for a Vitest/Playwright suite later, not re-derived from scratch |
+| Deployment | Docker (server only) → Railway; client deploys separately to static hosting | Not part of the original 10-phase plan — see `RUNBOOK.md`'s "Deployment (Railway)" section for the full writeup, including a real bundling bug (`tsup` silently failing to inline `@interview-prep/shared`) that only surfaced by actually running the built container, not from a green build/typecheck |
 
 ---
 
