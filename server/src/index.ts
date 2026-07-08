@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import { InMemoryRepository } from './db/inMemoryDb.js';
@@ -11,6 +14,14 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 const PORT = Number(process.env.PORT ?? 3001);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
 const NODE_ENV = process.env.NODE_ENV ?? 'development';
+
+// Set when the client's build output is deployed alongside the server (see
+// Dockerfile) — /app/server/dist/index.js -> /app/client/dist. In local dev
+// this directory doesn't exist (the client runs on its own Vite dev server,
+// port 5173) and the whole block below is skipped.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CLIENT_DIST_PATH = path.resolve(__dirname, '../../client/dist');
+const SERVE_CLIENT = existsSync(CLIENT_DIST_PATH);
 
 // Swap InMemoryRepository for PostgresRepository here to move to a real
 // store — no other file in the app needs to change. See RUNBOOK.md.
@@ -39,11 +50,20 @@ async function main() {
   app.use('/api/parse', createParseRouter());
   app.use('/api/summary', createSummaryRouter(repo));
 
+  // Single-service deploy: serve the client's built static files for
+  // everything that isn't an /api/* route. express.static already serves
+  // index.html for `/`; there's no client-side router in this app, so no
+  // SPA catch-all is needed — a genuinely unmatched path still 404s below.
+  if (SERVE_CLIENT) {
+    app.use(express.static(CLIENT_DIST_PATH));
+  }
+
   app.use(notFoundHandler);
   app.use(errorHandler);
 
   app.listen(PORT, () => {
-    console.log(`Server listening on http://localhost:${PORT} (${NODE_ENV})`);
+    const clientStatus = SERVE_CLIENT ? 'serving client from ' + CLIENT_DIST_PATH : 'API only, no client build found';
+    console.log(`Server listening on http://localhost:${PORT} (${NODE_ENV}) — ${clientStatus}`);
   });
 }
 

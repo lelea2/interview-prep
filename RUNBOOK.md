@@ -202,7 +202,7 @@ interview-prep/
 │   └── tsup.config.ts       # noExternal: ['@interview-prep/shared'] — see Deployment (Railway)
 ├── shared/                  # Shared TypeScript types (client + server)
 │   └── types.ts
-├── Dockerfile                # Builds + runs the server only, for Railway
+├── Dockerfile                # Builds client + server; server serves both — single Railway service
 ├── .dockerignore
 ├── railway.json               # Points Railway at the Dockerfile + healthcheck
 ├── .gitignore
@@ -250,25 +250,27 @@ And that the server is running before the client dev server starts.
 
 ## Deployment (Railway)
 
-The root `Dockerfile` builds and runs **the server only** — the client is a separate static-hosting deploy (Vercel/Netlify/nginx), not part of this image. `railway.json` points Railway at the Dockerfile and sets a `/api/health` healthcheck.
+The root `Dockerfile` builds **both** the client and the server, and the server serves the client's static build for everything under `/` — one Railway service, one URL, no separate frontend host. `railway.json` points Railway at the Dockerfile and sets a `/api/health` healthcheck.
+
+**History:** the first version of this Dockerfile built the server only, on the assumption the client would deploy separately (Vercel/Netlify). That shipped to Railway and **broke** — visiting the deployed URL returned `{"error":"No route matches GET /"}` instead of the app, because nothing was serving the client. Fixed by having `server/src/index.ts` serve `client/dist` as static files (see `SERVE_CLIENT` in that file) and having the Dockerfile build the client too. The client already used a relative `/api` base URL (`client/src/api/client.ts`), so this required zero client-side changes — same-origin `fetch('/api/...')` just works once both are served from the same process.
 
 ### Deploy
 
 1. In Railway, create a service from this repo (or `railway up` from the repo root with the Railway CLI). It auto-detects `railway.json` → `Dockerfile`.
 2. Set environment variables on the Railway service (Settings → Variables):
    - `OPENAI_API_KEY` — **required** for Generate Tracker (see [Environment Variables](#environment-variables))
-   - `CLIENT_ORIGIN` — the deployed client's URL (e.g. `https://your-app.vercel.app`), so CORS allows it
    - `OPENAI_MODEL` — optional, defaults to `gpt-4o-mini`
-   - Do **not** set `PORT` — Railway injects its own and the server already reads `process.env.PORT`
-3. Deploy the client separately (`npm run build -w client` → serve `client/dist/`), pointing its API calls at the Railway service's URL.
+   - `CLIENT_ORIGIN` — **not needed** for this single-service setup (same-origin requests don't hit CORS at all); only relevant if the client is ever split back out to its own host
+   - Do **not** set `PORT` or `NODE_ENV` — Railway injects its own `PORT` (the server already reads `process.env.PORT`) and the image's `ENV NODE_ENV=production` should be left alone
+3. That's it — one service, one URL, serving both the UI and `/api/*`.
 
 ### How the image is built (why it looks the way it does)
 
-- **Multi-stage, server-only.** `build-deps` (full install) → `build` (compiles `server/dist/index.js` via `npm run build -w server`) → `prod-deps` (runtime-only install, no devDependencies, no client) → `runtime` (final image: just `node_modules` + `server/dist`). Keeps the deployed image free of TypeScript/tsup/oxlint/the client's React toolchain.
-- **`server/tsup.config.ts` sets `noExternal: ['@interview-prep/shared']`.** This was a real bug caught while building this Dockerfile, not a preemptive guess: tsup externalizes anything listed in `package.json` `dependencies` by default, and `@interview-prep/shared` is listed there (it's a workspace package, not an npm one). Files that only did `import type {...}` from shared were unaffected (type-only imports are erased at compile time either way), but `schemas/tracker.ts` and `services/openaiClient.ts` import real *values* (`INTERVIEW_STATUSES`, etc.) — those imports were silently left as an unresolved `from "@interview-prep/shared"` in the compiled output. Running the built bundle directly on the host "worked" anyway, purely by accident: Node's bare-specifier resolution walks up from the script's own directory looking for `node_modules`, and it happened to find the real monorepo's workspace symlink. That symlink doesn't exist in a real deployment — the built image would have crashed on the very first request that hit `openaiClient.ts`, i.e. the first "Generate Tracker" click. Caught by actually running `docker build` + `docker run` + a live request against the container, not by reading the build log.
-- Verified end-to-end against this Dockerfile: container boots, `/api/health` and `/api/rows` respond correctly with no host filesystem access, and `/api/parse` correctly calls OpenAI when a real key is injected via `--env-file` at `docker run` time (never baked into the image).
+- **Multi-stage, builds both workspaces, ships only what's needed to run.** `build-deps` (full install, all workspaces) → `build` (`npm run build -w client` then `-w server`, producing `client/dist/*` static assets and a single self-contained `server/dist/index.js`) → `prod-deps` (runtime-only install, server's dependencies only) → `runtime` (final image: `node_modules` + `server/dist` + `client/dist`, nothing else). Keeps the deployed image free of TypeScript/tsup/oxlint/vite — the client's toolchain never ships, only its build output.
+- **`server/tsup.config.ts` sets `noExternal: ['@interview-prep/shared']`.** Caught while first building this Dockerfile, not a preemptive guess: tsup externalizes anything listed in `package.json` `dependencies` by default, and `@interview-prep/shared` is listed there (it's a workspace package, not an npm one). Files that only did `import type {...}` from shared were unaffected (type-only imports are erased at compile time either way), but `schemas/tracker.ts` and `services/openaiClient.ts` import real *values* (`INTERVIEW_STATUSES`, etc.) — those imports were silently left as an unresolved `from "@interview-prep/shared"` in the compiled output. Running the built bundle directly on the host "worked" anyway, purely by accident: Node's bare-specifier resolution walks up from the script's own directory looking for `node_modules`, and it happened to find the real monorepo's workspace symlink. That symlink doesn't exist in a real deployment — the built image would have crashed on the very first request that hit `openaiClient.ts`, i.e. the first "Generate Tracker" click. Caught by actually running `docker build` + `docker run` + a live request against the container, not by reading the build log.
+- Verified end-to-end against this Dockerfile (both bugs above): container boots, `GET /` returns the client's `index.html` (not a 404), a real static asset (`/assets/*.css`) serves with the correct content-type, `/api/health` and `/api/rows` respond correctly with no host filesystem access, an unmatched `/api/nope` still correctly 404s as a JSON API error (not swallowed by the static-file fallback), and `/api/parse` correctly calls OpenAI when a real key is injected via `--env-file` at `docker run` time (never baked into the image).
 
 ### Not yet done
 
 - **DB:** still `InMemoryRepository` — data resets on every deploy/restart. Swap for `PostgresRepository` + set `DATABASE_URL` when ready (see the repository-swap note earlier in this file).
-- No CI wired up to actually run `docker build` on push — worth adding before this is relied on for real deploys, since the bug above shows a green `tsc`/`vite build` doesn't guarantee the container actually boots.
+- No CI wired up to actually run `docker build` (+ a live request against the container) on push — worth adding before this is relied on for real deploys. Both bugs recorded above were the kind a green `tsc`/`vite build` doesn't catch; only actually running the container did.
